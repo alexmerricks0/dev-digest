@@ -8,7 +8,7 @@ crons = ["0 8 * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "dev-digest-db"
-database_id = "TBD"
+database_id = "462e53a8-defc-4964-addd-94b3c1828973"
 
 [vars]
 ENVIRONMENT = "development"
@@ -24,7 +24,7 @@ ALLOWED_ORIGINS = "https://digest.lfxai.dev,https://dev-digest.pages.dev"
 [[env.production.d1_databases]]
 binding = "DB"
 database_name = "dev-digest-db"
-database_id = "TBD"
+database_id = "462e53a8-defc-4964-addd-94b3c1828973"
 
 # Secrets (set via wrangler secret put):
 # OPENROUTER_API_KEY
