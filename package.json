@@ -1,0 +1,16 @@
+{
+  "name": "dev-digest",
+  "version": "0.1.0",
+  "private": false,
+  "description": "AI-curated daily developer news digest — HN, Reddit, and major releases distilled into a 2-minute morning read",
+  "author": "LFX AI LLC <alex@lfxai.dev>",
+  "license": "MIT",
+  "scripts": {
+    "dev:worker": "cd worker && npx wrangler dev",
+    "dev:dashboard": "cd dashboard && npm run dev",
+    "deploy:worker": "cd worker && npx wrangler deploy --env production",
+    "deploy:dashboard": "cd dashboard && npm run build && npx wrangler pages deploy dist --project-name=dev-digest",
+    "db:migrate": "cd worker && npx wrangler d1 execute dev-digest-db --file=../schema.sql --remote",
+    "install:all": "npm install && cd worker && npm install && cd ../dashboard && npm install"
+  }
+}
