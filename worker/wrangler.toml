@@ -1,0 +1,31 @@
+name = "dev-digest-worker"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+
+[triggers]
+crons = ["0 8 * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "dev-digest-db"
+database_id = "TBD"
+
+[vars]
+ENVIRONMENT = "development"
+ALLOWED_ORIGINS = "http://localhost:5173,https://digest.lfxai.dev,https://dev-digest.pages.dev"
+
+[env.production]
+name = "dev-digest-worker"
+
+[env.production.vars]
+ENVIRONMENT = "production"
+ALLOWED_ORIGINS = "https://digest.lfxai.dev,https://dev-digest.pages.dev"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "dev-digest-db"
+database_id = "TBD"
+
+# Secrets (set via wrangler secret put):
+# OPENROUTER_API_KEY
+# GITHUB_TOKEN (optional)

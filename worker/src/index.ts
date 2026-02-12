@@ -1,0 +1,286 @@
+/**
+ * Dev Digest Worker
+ * Cron-triggered daily developer news digest
+ * Serves API + RSS feed for the public dashboard
+ */
+
+import { fetchHNStories } from './hackernews';
+import { fetchRedditPosts } from './reddit';
+import { fetchGitHubReleases } from './github';
+import { curateDigest, type DigestResult } from './claude';
+
+export interface Env {
+  DB: D1Database;
+  OPENROUTER_API_KEY: string;
+  GITHUB_TOKEN: string;
+  ALLOWED_ORIGINS: string;
+  ENVIRONMENT: string;
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const origin = request.headers.get('Origin') || '';
+    const allowedOrigins = env.ALLOWED_ORIGINS.split(',');
+    const corsHeaders: Record<string, string> = {
+      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    };
+
+    if (allowedOrigins.includes(origin) || env.ENVIRONMENT === 'development') {
+      corsHeaders['Access-Control-Allow-Origin'] = origin || '*';
+    }
+
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { headers: corsHeaders });
+    }
+
+    const url = new URL(request.url);
+    let response: Response;
+
+    try {
+      switch (true) {
+        case url.pathname === '/api/health':
+          response = jsonResponse({ status: 'ok', timestamp: new Date().toISOString() });
+          break;
+
+        case url.pathname === '/api/today':
+          response = await getToday(env);
+          break;
+
+        case url.pathname.startsWith('/api/date/'):
+          response = await getByDate(url, env);
+          break;
+
+        case url.pathname === '/api/history':
+          response = await getHistory(url, env);
+          break;
+
+        case url.pathname === '/api/rss':
+          response = await getRSSFeed(env);
+          break;
+
+        case url.pathname === '/api/trigger' && env.ENVIRONMENT === 'development':
+          await runDigest(env);
+          response = jsonResponse({ status: 'triggered' });
+          break;
+
+        default:
+          response = jsonResponse({ error: 'Not Found' }, 404);
+      }
+    } catch (error) {
+      console.error('API Error:', error);
+      response = jsonResponse({ error: 'Internal Server Error' }, 500);
+    }
+
+    Object.entries(corsHeaders).forEach(([key, value]) => {
+      response.headers.set(key, value);
+    });
+
+    return response;
+  },
+
+  async scheduled(
+    controller: ScheduledController,
+    env: Env,
+    ctx: ExecutionContext,
+  ): Promise<void> {
+    console.log('Cron triggered at', controller.scheduledTime);
+    ctx.waitUntil(runDigest(env));
+  },
+};
+
+// ============================================================================
+// Core Digest Pipeline
+// ============================================================================
+
+async function runDigest(env: Env): Promise<void> {
+  const today = new Date().toISOString().slice(0, 10);
+
+  // Idempotency check
+  const existing = await env.DB.prepare(
+    'SELECT id FROM daily_digests WHERE date = ?',
+  ).bind(today).first();
+
+  if (existing) {
+    console.log(`Digest for ${today} already exists, skipping`);
+    return;
+  }
+
+  // Step 1: Fetch from all sources in parallel
+  console.log('Fetching sources...');
+  const [hnStories, redditPosts, releases] = await Promise.all([
+    fetchHNStories(),
+    fetchRedditPosts(),
+    fetchGitHubReleases(env.GITHUB_TOKEN),
+  ]);
+  console.log(`Fetched ${hnStories.length} HN stories, ${redditPosts.length} Reddit posts, ${releases.length} releases`);
+
+  // Step 2: Curate with Claude
+  console.log('Curating digest...');
+  const { digest, tokensUsed } = await curateDigest(
+    hnStories, redditPosts, releases, env.OPENROUTER_API_KEY,
+  );
+  console.log(`Digest complete, ${tokensUsed} tokens used`);
+
+  // Step 3: Store digest
+  const sourcesData = JSON.stringify({ hn: hnStories, reddit: redditPosts, github: releases });
+
+  await env.DB.prepare(
+    `INSERT INTO daily_digests (date, sources_data, digest, model, tokens_used)
+     VALUES (?, ?, ?, ?, ?)`,
+  )
+    .bind(today, sourcesData, JSON.stringify(digest), 'haiku', tokensUsed)
+    .run();
+
+  console.log(`Digest for ${today} stored successfully`);
+}
+
+// ============================================================================
+// API Route Handlers
+// ============================================================================
+
+async function getToday(env: Env): Promise<Response> {
+  const result = await env.DB.prepare(
+    `SELECT date, digest, tokens_used, created_at
+     FROM daily_digests ORDER BY date DESC LIMIT 1`,
+  ).first<{ date: string; digest: string; tokens_used: number; created_at: string }>();
+
+  if (!result) {
+    return jsonResponse({ error: 'No digest available yet' }, 404);
+  }
+
+  return jsonResponse({
+    date: result.date,
+    digest: JSON.parse(result.digest),
+    tokensUsed: result.tokens_used,
+    createdAt: result.created_at,
+  });
+}
+
+async function getByDate(url: URL, env: Env): Promise<Response> {
+  const dateStr = url.pathname.replace('/api/date/', '');
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    return jsonResponse({ error: 'Invalid date format. Use YYYY-MM-DD' }, 400);
+  }
+
+  const result = await env.DB.prepare(
+    `SELECT date, digest, tokens_used, created_at
+     FROM daily_digests WHERE date = ?`,
+  ).bind(dateStr).first<{ date: string; digest: string; tokens_used: number; created_at: string }>();
+
+  if (!result) {
+    return jsonResponse({ error: `No digest for ${dateStr}` }, 404);
+  }
+
+  return jsonResponse({
+    date: result.date,
+    digest: JSON.parse(result.digest),
+    tokensUsed: result.tokens_used,
+    createdAt: result.created_at,
+  });
+}
+
+async function getHistory(url: URL, env: Env): Promise<Response> {
+  const daysParam = url.searchParams.get('days');
+  const days = parseIntParam(daysParam, 30, 1, 365);
+  const startDate = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+
+  const results = await env.DB.prepare(
+    `SELECT date, digest, created_at
+     FROM daily_digests WHERE date >= ? ORDER BY date DESC`,
+  ).bind(startDate).all<{ date: string; digest: string; created_at: string }>();
+
+  const data = (results.results || []).map((row) => {
+    const digest = JSON.parse(row.digest) as DigestResult;
+    return {
+      date: row.date,
+      headline: digest.headline,
+      mustReadCount: digest.must_read.length,
+      worthKnowingCount: digest.worth_knowing.length,
+    };
+  });
+
+  return jsonResponse({ data });
+}
+
+async function getRSSFeed(env: Env): Promise<Response> {
+  const results = await env.DB.prepare(
+    `SELECT date, digest, created_at
+     FROM daily_digests ORDER BY date DESC LIMIT 7`,
+  ).all<{ date: string; digest: string; created_at: string }>();
+
+  const entries = (results.results || []).map((row) => {
+    const digest = JSON.parse(row.digest) as DigestResult;
+
+    const mustReadHtml = digest.must_read
+      .map((item) => `<h3><a href="${escapeXml(item.url)}">${escapeXml(item.title)}</a> [${item.source}]</h3><p>${escapeXml(item.summary)}</p><p><em>${escapeXml(item.why)}</em></p>`)
+      .join('');
+
+    const worthKnowingHtml = digest.worth_knowing
+      .map((item) => `<li><a href="${escapeXml(item.url)}">${escapeXml(item.title)}</a> — ${escapeXml(item.summary)}</li>`)
+      .join('');
+
+    const releasesHtml = digest.releases.length > 0
+      ? digest.releases.map((r) => `<li><strong>${escapeXml(r.repo)} ${escapeXml(r.version)}</strong> — ${escapeXml(r.summary)}</li>`).join('')
+      : '';
+
+    const content = `<h2>${escapeXml(digest.headline)}</h2>${mustReadHtml}${worthKnowingHtml ? `<h3>Worth Knowing</h3><ul>${worthKnowingHtml}</ul>` : ''}${releasesHtml ? `<h3>Releases</h3><ul>${releasesHtml}</ul>` : ''}`;
+
+    return `  <entry>
+    <title>${escapeXml(digest.headline)} — ${row.date}</title>
+    <link href="https://digest.lfxai.dev"/>
+    <id>https://digest.lfxai.dev/date/${row.date}</id>
+    <updated>${row.date}T08:00:00Z</updated>
+    <content type="html"><![CDATA[${content}]]></content>
+  </entry>`;
+  });
+
+  const latestDate = results.results?.[0]?.date || new Date().toISOString().slice(0, 10);
+
+  const feed = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Dev Digest</title>
+  <subtitle>AI-curated daily developer news</subtitle>
+  <link href="https://digest.lfxai.dev"/>
+  <link rel="self" href="https://digest.lfxai.dev/api/rss"/>
+  <id>https://digest.lfxai.dev/</id>
+  <updated>${latestDate}T08:00:00Z</updated>
+  <author><name>LFX AI LLC</name></author>
+${entries.join('\n')}
+</feed>`;
+
+  return new Response(feed, {
+    headers: {
+      'Content-Type': 'application/atom+xml; charset=utf-8',
+      'Cache-Control': 'public, max-age=3600',
+    },
+  });
+}
+
+// ============================================================================
+// Utilities
+// ============================================================================
+
+function jsonResponse(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+function parseIntParam(value: string | null, defaultValue: number, min: number, max: number): number {
+  if (value === null) return defaultValue;
+  const parsed = parseInt(value, 10);
+  if (isNaN(parsed)) return defaultValue;
+  return Math.max(min, Math.min(max, parsed));
+}
+
+function escapeXml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
