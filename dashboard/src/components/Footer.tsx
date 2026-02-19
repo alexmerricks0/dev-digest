@@ -10,14 +10,6 @@ export function Footer() {
         </p>
         <div className="flex gap-4">
         <a
-          href="https://dev-digest-worker.alexmerricks.workers.dev/api/rss"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="font-mono text-xs text-text-dim hover:text-accent transition-colors"
-        >
-          RSS
-        </a>
-        <a
           href="https://github.com/alexmerricks0/dev-digest"
           target="_blank"
           rel="noopener noreferrer"

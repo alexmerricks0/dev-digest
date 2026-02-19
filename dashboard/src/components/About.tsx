@@ -35,24 +35,6 @@ export function About() {
       </div>
 
       <h3 className="font-mono text-xs uppercase tracking-widest text-text-dim mb-4 mt-8">
-        RSS Feed
-      </h3>
-
-      <p className="text-sm text-text-secondary mb-4">
-        Add the feed to your reader and get the digest delivered daily without visiting the site.
-      </p>
-
-      <button
-        onClick={() => { navigator.clipboard.writeText('https://dev-digest-worker.alexmerricks.workers.dev/api/rss'); }}
-        className="inline-flex items-center gap-2 bg-accent-soft border border-accent/20 rounded-lg px-4 py-2 font-mono text-xs text-accent hover:bg-accent/20 transition-colors"
-      >
-        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M6.18 15.64a2.18 2.18 0 0 1 2.18 2.18C8.36 19 7.38 20 6.18 20C5 20 4 19 4 17.82a2.18 2.18 0 0 1 2.18-2.18M4 4.44A15.56 15.56 0 0 1 19.56 20h-2.83A12.73 12.73 0 0 0 4 7.27V4.44m0 5.66a9.9 9.9 0 0 1 9.9 9.9h-2.83A7.07 7.07 0 0 0 4 12.93V10.1Z" />
-        </svg>
-        Copy RSS Feed URL
-      </button>
-
-      <h3 className="font-mono text-xs uppercase tracking-widest text-text-dim mb-4 mt-8">
         Weekly Newsletter
       </h3>
 
@@ -72,7 +54,7 @@ export function About() {
           'Worker fetches from Hacker News, Reddit, and GitHub in parallel',
           'Claude Haiku curates: 3 must-reads, 5-7 worth-knowing, filters noise',
           'Digest is stored in Cloudflare D1',
-          'Dashboard and RSS feed serve the curated content',
+          'Dashboard serves the curated content',
         ].map((step, i) => (
           <li key={i} className="flex gap-3 text-text-secondary">
             <span className="font-mono text-xs text-accent flex-shrink-0 mt-0.5">

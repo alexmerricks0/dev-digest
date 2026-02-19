@@ -1,7 +1,7 @@
 /**
  * Dev Digest Worker
  * Cron-triggered daily developer news digest
- * Serves API + RSS feed for the public dashboard
+ * Serves API for the public dashboard
  */
 
 import { fetchHNStories } from './hackernews';
@@ -59,10 +59,6 @@ export default {
 
         case url.pathname === '/api/history':
           response = await getHistory(url, env);
-          break;
-
-        case url.pathname === '/api/rss':
-          response = await getRSSFeed(env);
           break;
 
         case url.pathname === '/api/subscribe' && request.method === 'POST':
@@ -235,60 +231,6 @@ async function getHistory(url: URL, env: Env): Promise<Response> {
   return jsonResponse({ data });
 }
 
-async function getRSSFeed(env: Env): Promise<Response> {
-  const results = await env.DB.prepare(
-    `SELECT date, digest, created_at
-     FROM daily_digests ORDER BY date DESC LIMIT 7`,
-  ).all<{ date: string; digest: string; created_at: string }>();
-
-  const entries = (results.results || []).map((row) => {
-    const digest = JSON.parse(row.digest) as DigestResult;
-
-    const mustReadHtml = digest.must_read
-      .map((item) => `<h3><a href="${escapeXml(item.url)}">${escapeXml(item.title)}</a> [${item.source}]</h3><p>${escapeXml(item.summary)}</p><p><em>${escapeXml(item.why)}</em></p>`)
-      .join('');
-
-    const worthKnowingHtml = digest.worth_knowing
-      .map((item) => `<li><a href="${escapeXml(item.url)}">${escapeXml(item.title)}</a> — ${escapeXml(item.summary)}</li>`)
-      .join('');
-
-    const releasesHtml = digest.releases.length > 0
-      ? digest.releases.map((r) => `<li><strong>${escapeXml(r.repo)} ${escapeXml(r.version)}</strong> — ${escapeXml(r.summary)}</li>`).join('')
-      : '';
-
-    const content = `<h2>${escapeXml(digest.headline)}</h2>${mustReadHtml}${worthKnowingHtml ? `<h3>Worth Knowing</h3><ul>${worthKnowingHtml}</ul>` : ''}${releasesHtml ? `<h3>Releases</h3><ul>${releasesHtml}</ul>` : ''}`;
-
-    return `  <entry>
-    <title>${escapeXml(digest.headline)} — ${row.date}</title>
-    <link href="https://digest.lfxai.dev"/>
-    <id>https://digest.lfxai.dev/date/${row.date}</id>
-    <updated>${row.date}T08:00:00Z</updated>
-    <content type="html"><![CDATA[${content}]]></content>
-  </entry>`;
-  });
-
-  const latestDate = results.results?.[0]?.date || new Date().toISOString().slice(0, 10);
-
-  const feed = `<?xml version="1.0" encoding="UTF-8"?>
-<feed xmlns="http://www.w3.org/2005/Atom">
-  <title>Dev Digest</title>
-  <subtitle>AI-curated daily developer news</subtitle>
-  <link href="https://digest.lfxai.dev"/>
-  <link rel="self" href="https://digest.lfxai.dev/api/rss"/>
-  <id>https://digest.lfxai.dev/</id>
-  <updated>${latestDate}T08:00:00Z</updated>
-  <author><name>LFX AI LLC</name></author>
-${entries.join('\n')}
-</feed>`;
-
-  return new Response(feed, {
-    headers: {
-      'Content-Type': 'application/atom+xml; charset=utf-8',
-      'Cache-Control': 'public, max-age=3600',
-    },
-  });
-}
-
 // ============================================================================
 // Utilities
 // ============================================================================
@@ -305,15 +247,6 @@ function parseIntParam(value: string | null, defaultValue: number, min: number, 
   const parsed = parseInt(value, 10);
   if (isNaN(parsed)) return defaultValue;
   return Math.max(min, Math.min(max, parsed));
-}
-
-function escapeXml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
 }
 
 async function withRetry<T>(fn: () => Promise<T>, attempts: number, delayMs: number): Promise<T> {
