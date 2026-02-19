@@ -13,6 +13,7 @@ export interface Env {
   DB: D1Database;
   OPENROUTER_API_KEY: string;
   GITHUB_TOKEN: string;
+  TRIGGER_SECRET: string;
   ALLOWED_ORIGINS: string;
   ENVIRONMENT: string;
 }
@@ -59,10 +60,16 @@ export default {
           response = await getRSSFeed(env);
           break;
 
-        case url.pathname === '/api/trigger' && env.ENVIRONMENT === 'development':
+        case url.pathname === '/api/trigger' && request.method === 'POST': {
+          const authHeader = request.headers.get('Authorization');
+          if (!env.TRIGGER_SECRET || authHeader !== `Bearer ${env.TRIGGER_SECRET}`) {
+            response = jsonResponse({ error: 'Unauthorized' }, 401);
+            break;
+          }
           await runDigest(env);
           response = jsonResponse({ status: 'triggered' });
           break;
+        }
 
         default:
           response = jsonResponse({ error: 'Not Found' }, 404);
@@ -85,7 +92,10 @@ export default {
     ctx: ExecutionContext,
   ): Promise<void> {
     console.log('Cron triggered at', controller.scheduledTime);
-    ctx.waitUntil(runDigest(env));
+    ctx.waitUntil(
+      withRetry(() => runDigest(env), 3, 5000)
+        .catch((error) => console.error('All retry attempts failed for digest:', error)),
+    );
   },
 };
 
@@ -283,4 +293,17 @@ function escapeXml(str: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
+}
+
+async function withRetry<T>(fn: () => Promise<T>, attempts: number, delayMs: number): Promise<T> {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (error) {
+      console.error(`Attempt ${i + 1}/${attempts} failed:`, error);
+      if (i === attempts - 1) throw error;
+      await new Promise((r) => setTimeout(r, delayMs * Math.pow(2, i)));
+    }
+  }
+  throw new Error('unreachable');
 }
