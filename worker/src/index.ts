@@ -8,14 +8,19 @@ import { fetchHNStories } from './hackernews';
 import { fetchRedditPosts } from './reddit';
 import { fetchGitHubReleases } from './github';
 import { curateDigest, type DigestResult } from './claude';
+import { handleSubscribe, handleUnsubscribe, sendWeeklyNewsletter } from './newsletter';
 
 export interface Env {
   DB: D1Database;
   OPENROUTER_API_KEY: string;
   GITHUB_TOKEN: string;
   TRIGGER_SECRET: string;
+  RESEND_API_KEY: string;
   ALLOWED_ORIGINS: string;
   ENVIRONMENT: string;
+  SITE_NAME: string;
+  SITE_URL: string;
+  SENDER_EMAIL: string;
 }
 
 export default {
@@ -23,7 +28,7 @@ export default {
     const origin = request.headers.get('Origin') || '';
     const allowedOrigins = env.ALLOWED_ORIGINS.split(',');
     const corsHeaders: Record<string, string> = {
-      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type',
     };
 
@@ -60,6 +65,14 @@ export default {
           response = await getRSSFeed(env);
           break;
 
+        case url.pathname === '/api/subscribe' && request.method === 'POST':
+          response = await handleSubscribe(request, env);
+          break;
+
+        case url.pathname === '/api/unsubscribe':
+          response = await handleUnsubscribe(url, env);
+          break;
+
         case url.pathname === '/api/trigger' && request.method === 'POST': {
           const authHeader = request.headers.get('Authorization');
           if (!env.TRIGGER_SECRET || authHeader !== `Bearer ${env.TRIGGER_SECRET}`) {
@@ -91,11 +104,19 @@ export default {
     env: Env,
     ctx: ExecutionContext,
   ): Promise<void> {
-    console.log('Cron triggered at', controller.scheduledTime);
-    ctx.waitUntil(
-      withRetry(() => runDigest(env), 3, 5000)
-        .catch((error) => console.error('All retry attempts failed for digest:', error)),
-    );
+    console.log('Cron triggered:', controller.cron, 'at', controller.scheduledTime);
+
+    if (controller.cron === '0 10 * * 1') {
+      ctx.waitUntil(
+        sendWeeklyNewsletter(env)
+          .catch((error) => console.error('Newsletter send failed:', error)),
+      );
+    } else {
+      ctx.waitUntil(
+        withRetry(() => runDigest(env), 3, 5000)
+          .catch((error) => console.error('All retry attempts failed for digest:', error)),
+      );
+    }
   },
 };
 
